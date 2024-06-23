@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::ops::Index;
 use std::rc::Rc;
 use std::sync::{Arc};
 use ariadne::{Color, Label};
@@ -6,30 +7,30 @@ use crate::error::{ResultErrorless, ErrorReport, ErrorReportKind};
 use crate::span::{Span};
 use crate::token::{Token, TokenKind};
 
-pub struct Lexer<'a> {
+pub struct Lexer {
     filename: Arc<str>,
-    source: &'a str,
+    source: Vec<char>,
     index: usize,
     pub had_error: bool,
     pub tokens: Vec<Token>,
     reports: Rc<RefCell<Vec<ErrorReport>>>
 }
 
-impl<'a> Lexer<'a> {
-    pub fn new(filename: Arc<str>, source: &'a str, reports: Rc<RefCell<Vec<ErrorReport>>>) -> Self {
+impl Lexer {
+    pub fn new(filename: Arc<str>, source: &str, reports: Rc<RefCell<Vec<ErrorReport>>>) -> Self {
         Lexer {
             filename,
-            source,
             index: 0,
+            source: source.chars().collect(),
             had_error: false,
             tokens: Vec::new(),
             reports
         }
     }
 
-    fn current(&self) -> Option<char> { self.source.chars().nth(self.index) }
+    fn current(&self) -> Option<char> { self.source.get(self.index).cloned() }
 
-    fn peek(&self, offset: usize) -> Option<char> { self.source.chars().nth(self.index + offset) }
+    fn peek(&self, offset: usize) -> Option<char> { self.source.get(self.index+offset).cloned() }
 
     fn span(&self, start: usize, end: usize) -> Span { Span::new(start, end, self.filename.clone()) }
 
@@ -49,7 +50,7 @@ impl<'a> Lexer<'a> {
 
     fn push_simple(&mut self, kind: TokenKind, length: usize) {
         let start = self.index;
-        let text = self.source[self.index..self.index+length].to_string();
+        let text = self.source[self.index..self.index+length].iter().collect();
         for _ in 0..length {
             self.advance();
         }
