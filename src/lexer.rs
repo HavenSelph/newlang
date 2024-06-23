@@ -1,36 +1,41 @@
 use std::cell::RefCell;
+use std::iter::Peekable;
 use std::ops::Index;
 use std::rc::Rc;
+use std::str::Chars;
 use std::sync::{Arc};
 use ariadne::{Color, Label};
 use crate::error::{ResultErrorless, ErrorReport, ErrorReportKind};
 use crate::span::{Span};
 use crate::token::{Token, TokenKind};
 
-pub struct Lexer {
+pub struct Lexer<'a> {
     filename: Arc<str>,
-    source: Vec<char>,
+    source: &'a str,
+    chars: Peekable<Chars<'a>>,
+    current: Option<char>,
     index: usize,
     pub had_error: bool,
-    pub tokens: Vec<Token>,
+    pub tokens: Vec<Token<'a>>,
     reports: Rc<RefCell<Vec<ErrorReport>>>
 }
 
-impl Lexer {
-    pub fn new(filename: Arc<str>, source: &str, reports: Rc<RefCell<Vec<ErrorReport>>>) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn new(filename: Arc<str>, source: &'a str, reports: Rc<RefCell<Vec<ErrorReport>>>) -> Self {
+        let mut chars = source.chars().peekable();
         Lexer {
             filename,
+            current: chars.next(),
             index: 0,
-            source: source.chars().collect(),
+            source,
+            chars,
             had_error: false,
             tokens: Vec::new(),
             reports
         }
     }
 
-    fn current(&self) -> Option<char> { self.source.get(self.index).cloned() }
-
-    fn peek(&self, offset: usize) -> Option<char> { self.source.get(self.index+offset).cloned() }
+    fn peek(&mut self, offset: usize) -> Option<char> { self.chars.peek().cloned() }
 
     fn span(&self, start: usize, end: usize) -> Span { Span::new(start, end, self.filename.clone()) }
 
@@ -39,18 +44,19 @@ impl Lexer {
     fn span_from(&self, from: usize) -> Span { Span::new(from, self.index, self.filename.clone()) }
 
     fn advance(&mut self) {
-        if self.current().is_some() {
+        if self.current.is_some() {
+            self.current = self.chars.next();
             self.index += 1;
         }
     }
 
-    fn push(&mut self, mut token: Token) {
+    fn push(&mut self, mut token: Token<'a>) {
         self.tokens.push(token)
     }
 
     fn push_simple(&mut self, kind: TokenKind, length: usize) {
         let start = self.index;
-        let text = self.source[self.index..self.index+length].iter().collect();
+        let text = &self.source[self.index..self.index+length];
         for _ in 0..length {
             self.advance();
         }
@@ -63,45 +69,28 @@ impl Lexer {
     }
 
     pub fn lex_tokens(&mut self) {
-        while let Some(char) = self.current() {
+        while let Some(char) = self.current {
             let start = self.index;
             match char {
                 c if c.is_whitespace() => self.advance(),
                 'a'..='z' | 'A'..='Z' | '_' => {
-                    let mut ident = String::new();
-                    while let Some(c) = self.current() {
+                    while let Some(c) = self.current {
                         match c {
                             'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
-                                ident.push(c);
                                 self.advance();
                             }
                             _ => break
                         }
                     };
+                    let ident = &self.source[start..self.index];
                     let span = self.span(start, self.index-1);
-                    let kind = match ident.as_str() {
-                        // "and" => TokenKind::And,
-                        // "class" => TokenKind::Class,
-                        // "else" => TokenKind::False,
-                        // "False" => TokenKind::False,
-                        // "for" => TokenKind::For,
-                        // "fn" => TokenKind::Fn,
-                        // "if" => TokenKind::If,
-                        // "nothing" => TokenKind::Nothing,
-                        // "or" => TokenKind::Or,
-                        // "print" => TokenKind::Print,
-                        // "return" => TokenKind::Return,
-                        // "super" => TokenKind::Super,
-                        // "this" => TokenKind::This,
-                        // "True" => TokenKind::True,
-                        // "While" => TokenKind::While,
+                    let kind = match ident {
                         "let" => TokenKind::Let,
                         _ => TokenKind::Identifier
                     };
                     self.push(Token::new(kind, span, ident))
                 }
                 '0' if self.peek(1).map_or(false, |c| "box".contains(c)) => {
-                    let mut buf = String::new();
                     let base = match (char, self.peek(1)) {
                         ('0', Some('b')) => Base::Bin,
                         ('0', Some('o')) => Base::Oct,
@@ -110,56 +99,55 @@ impl Lexer {
                     };
                     self.advance();
                     self.advance();
-                    if self.lex_integer(&mut buf, base, start).is_err() {
+                    if self.lex_integer(base, start).is_err() {
                         continue;
                     }
-                    self.push(Token::new(TokenKind::from(base), self.span_from(start), buf));
+                    let num = &self.source[start..self.index];
+                    self.push(Token::new(TokenKind::from(base), self.span_from(start), num));
                 }
                 '0'..='9' => {
-                    let mut buf = String::new();
-                    if self.lex_integer(&mut buf, Base::Dec, start).is_err() {
+                    if self.lex_integer(Base::Dec, start).is_err() {
                         continue;
                     }
-                    if let Some('.') = self.current() {
-                        buf.push('.');
+                    if let Some('.') = self.current {
                         self.advance();
-                        if self.lex_integer(&mut buf, Base::Dec, start).is_err() {
+                        if self.lex_integer(Base::Dec, start).is_err() {
                             continue;
                         }
-                        if let Some('.') = self.current() {
+                        if let Some('.') = self.current {
                             let span = self.span_from(start);
                             let e = ErrorReport::new(ErrorReportKind::SyntaxError, span, "Invalid Float Literal".to_string())
                                 .with_label(Label::new(self.span_at(self.index)).with_message("Second fractional indicator").with_color(Color::Red));
                             self.push_report(e);
                             continue;
                         }
-                        self.push(Token::new(TokenKind::FloatLiteral, self.span_from(start), buf));
+                        let num = &self.source[start..self.index];
+                        self.push(Token::new(TokenKind::FloatLiteral, self.span_from(start), num));
                         continue;
                     }
-                    self.push(Token::new(TokenKind::IntegerLiteralDec, self.span_from(start), buf));
+                    let num = &self.source[start..self.index];
+                    self.push(Token::new(TokenKind::IntegerLiteralDec, self.span_from(start), num));
                 },
                 '.' => match self.peek(1) {
                     Some('0'..='9') => {
-                        let mut buf = String::new();
-                        buf.push('.');
                         self.advance();
-                        if self.lex_integer(&mut buf, Base::Dec, start).is_err() {
+                        if self.lex_integer(Base::Dec, start).is_err() {
                             continue;
                         }
-                        if let Some('.') = self.current() {
+                        if let Some('.') = self.current {
                             let span = self.span_from(start);
                             let e = ErrorReport::new(ErrorReportKind::SyntaxError, span, "Invalid Float Literal".to_string())
                                 .with_label(Label::new(self.span_at(self.index)).with_message("Second fractional indicator").with_color(Color::Red));
                             self.push_report(e);
                             continue;
                         }
-                        self.push(Token::new(TokenKind::FloatLiteral, self.span_from(start), buf));
+                        self.push(Token::new(TokenKind::FloatLiteral, self.span_from(start), &self.source[start..self.index]));
                     }
                     _ => self.push_simple(TokenKind::Period, 1)
                 }
                 '/' => match self.peek(1) {
                     Some('/') => {
-                        while let Some(char) = self.current() {
+                        while let Some(char) = self.current {
                             if char == '\n' {
                                 break;
                             }
@@ -170,7 +158,7 @@ impl Lexer {
                         let mut depth: usize = 1;
                         self.advance();
                         while depth > 0 {
-                            let Some(char) = self.current() else {
+                            let Some(char) = self.current else {
                                 let span = self.span_from(start);
                                 let e = ErrorReport::new(ErrorReportKind::SyntaxError, span, "Unterminated Multi-Line Comment".to_string())
                                     .with_label(Label::new(self.span(start, start+2)).with_message("Comment started here").with_color(Color::Red));
@@ -195,7 +183,7 @@ impl Lexer {
                 '=' => self.push_simple(TokenKind::Equals, 1),
                 _ => {
                     let span = self.span_at(self.index);
-                    let e = ErrorReport::new(ErrorReportKind::UnexpectedCharacter, span.clone(), format!("{:?}", self.current().expect("Lexer matched on Some but found None")))
+                    let e = ErrorReport::new(ErrorReportKind::UnexpectedCharacter, span.clone(), format!("{:?}", self.current.expect("Lexer matched on Some but found None")))
                         .with_label(Label::new(span).with_message("Not a valid character.").with_color(Color::Red));
                     self.push_report(e);
                     self.advance();
@@ -205,15 +193,15 @@ impl Lexer {
         self.push_simple(TokenKind::EOF, 0);
     }
 
-    fn lex_integer(&mut self, buf: &mut String, base: Base, start: usize) -> ResultErrorless<()> {
-        while let Some(char) = self.current() {
+    fn lex_integer(&mut self, base: Base, start: usize) -> ResultErrorless<()> {
+        // use slices instead
+        while let Some(char) = self.current {
             match (base, char.to_ascii_lowercase()) {
                 (Base::Bin, '0'..='1')
                 | (Base::Oct, '0'..='7')
                 | (Base::Dec, '0'..='9')
                 | (Base::Hex, '0'..='9' | 'a'..='f') => {
                     self.advance();
-                    buf.push(char)
                 },
                 (_, '0'..='9' | 'a'..='z') => {
                     let span = self.span_from(start);

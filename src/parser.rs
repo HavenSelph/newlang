@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::BinaryHeap;
+use std::ops::Deref;
 use std::rc::Rc;
 use std::slice::{Iter};
 use ariadne::{Color, Label};
@@ -11,11 +12,11 @@ use crate::span::Span;
 pub struct Parser<'a> {
     current: RefToken<'a>,
     pub had_error: bool,
-    tokens: Iter<'a, Token>,
+    tokens: Iter<'a, Token<'a>>,
     reports: Rc<RefCell<Vec<ErrorReport>>>
 }
 
-type RefToken<'a> = &'a Token;
+type RefToken<'a> = &'a Token<'a>;
 
 impl<'a> Parser<'a> {
     pub fn new(tokens_vec: &'a [Token], reports: Rc<RefCell<Vec<ErrorReport>>>) -> Self {
@@ -80,7 +81,7 @@ impl<'a> Parser<'a> {
         match self.current {
             Token { kind: TokenKind::StringLiteral, span, text, .. } => {
                 self.advance();
-                Ok(Rc::new(AST::new(span.clone(), ASTKind::StringLiteral(text.clone()))))
+                Ok(Rc::new(AST::new(span.clone(), ASTKind::StringLiteral(text.to_string()))))
             }
             Token { kind: TokenKind::EOF, span, .. } => {
                 let e = ErrorReport::new(ErrorReportKind::Custom, span.clone(), "Unexpected EOF".to_string());

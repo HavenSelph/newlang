@@ -26,15 +26,15 @@ pub enum TokenKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct Token {
+pub struct Token<'a> {
     pub kind: TokenKind,
     pub span: Span,
-    pub text: String,
+    pub text: &'a str,
     pub newline_before: bool
 }
 
-impl Token {
-    pub fn new(kind: TokenKind, span: Span, text: String) -> Self {
+impl<'a> Token<'a> {
+    pub fn new(kind: TokenKind, span: Span, text: &'a str) -> Self {
         Token {
             kind,
             span,
@@ -44,7 +44,7 @@ impl Token {
     }
 }
 
-impl Display for Token {
+impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Token{{{:?}, {}, {:?}", self.kind, self.span, self.text)?;
         if self.newline_before {
