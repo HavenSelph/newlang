@@ -36,19 +36,25 @@ struct Args {
 }
 
 fn interpret(debug: bool, filename: Arc<str>, contents: &str, reports: Rc<RefCell<Vec<ErrorReport>>>) -> i32 {
-    let mut lexer = Lexer::new(filename.clone(), contents, reports.clone());
-    lexer.lex_tokens();
-    if debug {
-        for (i, token) in lexer.tokens.iter().enumerate() {
-            println!("{}: {}", i, token);
+    let tokens = {
+        let mut lexer = Lexer::new(filename.clone(), contents, reports.clone());
+        lexer.lex_tokens();
+        if debug {
+            for (i, token) in lexer.tokens.iter().enumerate() {
+                println!("{}: {}", i, token);
+            }
         }
-    }
-    if lexer.had_error { return 64; }
+        if lexer.had_error { return 64; }
+        lexer.tokens
+    };
 
-    let mut parser = Parser::new(&lexer.tokens, reports.clone());
-    let Some(ast) = parser.parse() else { return 64; };
-    if debug { println!("{}", ast) }
-    if parser.had_error { return 64; }
+    let ast = {
+        let mut parser = Parser::new(&tokens, reports.clone());
+        let Some(ast) = parser.parse() else { return 69; };
+        if debug { println!("{}", ast) }
+        if parser.had_error { return 69; }
+        ast
+    };
 
     // Interpret!
     unimplemented!("Reached interpretation step, not yet finished.");
@@ -88,7 +94,9 @@ fn main() {
         File::open(arc_filename.deref()).unwrap().read_to_string(&mut contents).unwrap();
 
         let code = interpret(args.debug, arc_filename.clone(), &contents, reports.clone());
-        print_reports(args.error_level, arc_filename, &contents, reports);
+        if !reports.borrow().is_empty() {
+            print_reports(args.error_level, arc_filename, &contents, reports);
+        }
         exit(code);
     } else {
         repl(args.debug)
